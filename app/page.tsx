@@ -1,5 +1,7 @@
 "use client"
 
+import type React from "react"
+
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -34,7 +36,7 @@ import {
   where,
   orderBy,
 } from "firebase/firestore"
-import { getStorage } from "firebase/storage"
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -51,7 +53,15 @@ const db = getFirestore(app)
 const storage = getStorage(app)
 
 const googleProvider = new GoogleAuthProvider()
+googleProvider.addScope("email")
+googleProvider.addScope("profile")
+googleProvider.setCustomParameters({
+  prompt: "select_account",
+})
+
 const appleProvider = new OAuthProvider("apple.com")
+appleProvider.addScope("email")
+appleProvider.addScope("name")
 
 interface CartItem {
   id: string
@@ -131,6 +141,10 @@ export default function SaturnaliaStore() {
     cardholderName: "",
   })
 
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string>("")
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser)
@@ -138,9 +152,18 @@ export default function SaturnaliaStore() {
         setShippingInfo((prev) => ({ ...prev, email: firebaseUser.email || "" }))
         loadUserCart(firebaseUser.uid)
         loadUserOrders(firebaseUser.uid)
+
+        if (firebaseUser.email === "skumar6_be22@thapar.edu") {
+          setIsAdmin(true)
+        } else {
+          setIsAdmin(false)
+          setShowAdminPanel(false)
+        }
       } else {
         setCart([])
         setOrders([])
+        setIsAdmin(false)
+        setShowAdminPanel(false)
       }
     })
 
@@ -213,6 +236,7 @@ export default function SaturnaliaStore() {
     }
 
     try {
+      console.log("[v0] Adding to cart:", product.name, "for user:", user.uid)
       const cartItemRef = doc(db, "users", user.uid, "cart", product.id)
       const cartItemDoc = await getDoc(cartItemRef)
 
@@ -221,6 +245,7 @@ export default function SaturnaliaStore() {
         await updateDoc(cartItemRef, {
           quantity: currentQuantity + 1,
         })
+        console.log("[v0] Updated cart quantity to:", currentQuantity + 1)
       } else {
         await setDoc(cartItemRef, {
           id: product.id,
@@ -229,9 +254,12 @@ export default function SaturnaliaStore() {
           imageUrl: product.imageUrl,
           quantity: 1,
         })
+        console.log("[v0] Added new item to cart")
       }
+      alert(`${product.name} added to cart!`)
     } catch (error) {
-      console.error("Error adding to cart:", error)
+      console.error("[v0] Error adding to cart:", error)
+      alert("Error adding to cart. Please try again.")
     }
   }
 
@@ -263,26 +291,67 @@ export default function SaturnaliaStore() {
 
   const cartTotal = cart.reduce((total, item) => total + item.price * item.quantity, 0)
 
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setSelectedFile(file)
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        setPreviewUrl(e.target?.result as string)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const uploadImage = async (file: File): Promise<string> => {
+    const storageRef = ref(storage, `products/${Date.now()}_${file.name}`)
+    const snapshot = await uploadBytes(storageRef, file)
+    const downloadURL = await getDownloadURL(snapshot.ref)
+    return downloadURL
+  }
+
   const handleAddProduct = async () => {
     if (newProduct.name && newProduct.price > 0) {
       try {
+        setUploadingImage(true)
+        console.log("[v0] Adding product to database:", newProduct)
+
+        let imageUrl = newProduct.imageUrl
+
+        if (selectedFile) {
+          console.log("[v0] Uploading image...")
+          imageUrl = await uploadImage(selectedFile)
+          console.log("[v0] Image uploaded successfully:", imageUrl)
+        }
+
         const productsCollection = collection(db, "products")
-        await addDoc(productsCollection, {
+        const docRef = await addDoc(productsCollection, {
           name: newProduct.name,
           price: newProduct.price,
           description: newProduct.description,
-          imageUrl: newProduct.imageUrl || `/placeholder.svg?height=300&width=300&query=${newProduct.name}`,
+          imageUrl: imageUrl || `/placeholder.svg?height=300&width=300&query=${encodeURIComponent(newProduct.name)}`,
           createdAt: new Date(),
         })
+        console.log("[v0] Product added successfully with ID:", docRef.id)
+
         setNewProduct({ name: "", price: 0, description: "", imageUrl: "" })
+        setSelectedFile(null)
+        setPreviewUrl("")
+        setUploadingImage(false)
+        alert("Product added successfully!")
       } catch (error) {
-        console.error("Error adding product:", error)
+        console.error("[v0] Error adding product:", error)
+        setUploadingImage(false)
+        alert("Error adding product. Please try again.")
       }
+    } else {
+      alert("Please fill in product name and price.")
     }
   }
 
   const handleEditProduct = async (product: Product) => {
     try {
+      console.log("[v0] Updating product:", product.id)
       const productRef = doc(db, "products", product.id)
       await updateDoc(productRef, {
         name: product.name,
@@ -291,33 +360,40 @@ export default function SaturnaliaStore() {
         imageUrl: product.imageUrl,
         updatedAt: new Date(),
       })
+      console.log("[v0] Product updated successfully")
       setEditingProduct(null)
+      alert("Product updated successfully!")
     } catch (error) {
-      console.error("Error updating product:", error)
+      console.error("[v0] Error updating product:", error)
+      alert("Error updating product. Please try again.")
     }
   }
 
   const handleDeleteProduct = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, "products", id))
-    } catch (error) {
-      console.error("Error deleting product:", error)
+    if (confirm("Are you sure you want to delete this product?")) {
+      try {
+        console.log("[v0] Deleting product:", id)
+        await deleteDoc(doc(db, "products", id))
+        console.log("[v0] Product deleted successfully")
+        alert("Product deleted successfully!")
+      } catch (error) {
+        console.error("[v0] Error deleting product:", error)
+        alert("Error deleting product. Please try again.")
+      }
     }
   }
 
   const handleAdminLogin = () => {
-    if (adminCredentials.id === "Shivam" && adminCredentials.password === "Saturnalia@2025") {
-      setIsAdmin(true)
+    if (user?.email === "skumar6_be22@thapar.edu") {
       setShowAdminLogin(false)
       setAdminCredentials({ id: "", password: "" })
       setAdminLoginError("")
     } else {
-      setAdminLoginError("Invalid credentials. Please try again.")
+      setAdminLoginError("Admin access is restricted to authorized personnel only.")
     }
   }
 
   const handleAdminLogout = () => {
-    setIsAdmin(false)
     setShowAdminPanel(false)
   }
 
@@ -431,37 +507,65 @@ export default function SaturnaliaStore() {
 
   const handleGoogleSignIn = async () => {
     try {
+      console.log("[v0] Starting Google sign-in...")
+
+      // Configure popup settings
       const result = await signInWithPopup(auth, googleProvider)
       const user = result.user
 
+      console.log("[v0] Google sign-in successful, user:", user.email)
+
       if (!validateThaparEmail(user.email || "")) {
+        console.log("[v0] Invalid email domain, signing out...")
         await signOut(auth)
         setUserLoginError("Only @thapar.edu email addresses are allowed to login.")
         return
       }
 
+      console.log("[v0] Email validation passed")
       setShowUserLogin(false)
       setUserLoginError("")
     } catch (error: any) {
-      setUserLoginError(error.message || "Google sign-in failed. Please try again.")
+      console.error("[v0] Google sign-in error:", error)
+
+      if (error.code === "auth/popup-closed-by-user") {
+        setUserLoginError("Sign-in was cancelled. Please try again.")
+      } else if (error.code === "auth/popup-blocked") {
+        setUserLoginError("Popup was blocked. Please allow popups and try again.")
+      } else {
+        setUserLoginError(error.message || "Google sign-in failed. Please try again.")
+      }
     }
   }
 
   const handleAppleSignIn = async () => {
     try {
+      console.log("[v0] Starting Apple sign-in...")
       const result = await signInWithPopup(auth, appleProvider)
       const user = result.user
 
+      console.log("[v0] Apple sign-in successful, user:", user.email)
+
       if (!validateThaparEmail(user.email || "")) {
+        console.log("[v0] Invalid email domain, signing out...")
         await signOut(auth)
         setUserLoginError("Only @thapar.edu email addresses are allowed to login.")
         return
       }
 
+      console.log("[v0] Email validation passed")
       setShowUserLogin(false)
       setUserLoginError("")
     } catch (error: any) {
-      setUserLoginError(error.message || "Apple sign-in failed. Please try again.")
+      console.error("[v0] Apple sign-in error:", error)
+
+      if (error.code === "auth/popup-closed-by-user") {
+        setUserLoginError("Sign-in was cancelled. Please try again.")
+      } else if (error.code === "auth/popup-blocked") {
+        setUserLoginError("Popup was blocked. Please allow popups and try again.")
+      } else {
+        setUserLoginError(error.message || "Apple sign-in failed. Please try again.")
+      }
     }
   }
 
@@ -663,19 +767,15 @@ export default function SaturnaliaStore() {
                 Logout
               </Button>
             )}
-            {!isAdmin ? (
+            {user?.email === "skumar6_be22@thapar.edu" && (
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setShowAdminLogin(true)}
+                onClick={() => setShowAdminPanel(!showAdminPanel)}
                 className="text-white hover:bg-gray-700"
               >
                 <Lock className="w-4 h-4 mr-1" />
-                Admin
-              </Button>
-            ) : (
-              <Button variant="ghost" size="sm" onClick={handleAdminLogout} className="text-white hover:bg-gray-700">
-                Admin Logout
+                {showAdminPanel ? "Hide Admin" : "Admin Panel"}
               </Button>
             )}
             <Menu className="text-white w-6 h-6" />
@@ -875,10 +975,10 @@ export default function SaturnaliaStore() {
 
             {/* Right Column - Products */}
             <div className="md:col-span-2 order-2 md:order-2">
-              {isAdmin && (
+              {user?.email === "skumar6_be22@thapar.edu" && (
                 <Card className="mb-6 p-4 bg-yellow-50 border-yellow-200">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-semibold text-yellow-800">Admin Panel</h3>
+                    <h3 className="font-semibold text-yellow-800">Admin Panel - Welcome {user.email}</h3>
                     <Button variant="outline" size="sm" onClick={() => setShowAdminPanel(!showAdminPanel)}>
                       {showAdminPanel ? "Hide" : "Show"} Admin Tools
                     </Button>
@@ -906,13 +1006,36 @@ export default function SaturnaliaStore() {
                         value={newProduct.description}
                         onChange={(e) => setNewProduct((prev) => ({ ...prev, description: e.target.value }))}
                       />
+
+                      <div className="space-y-3">
+                        <label className="block text-sm font-medium">Product Image</label>
+                        <div className="flex flex-col gap-3">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleFileSelect}
+                            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-yellow-50 file:text-yellow-700 hover:file:bg-yellow-100"
+                          />
+                          {previewUrl && (
+                            <div className="relative w-32 h-32 border rounded-lg overflow-hidden">
+                              <img
+                                src={previewUrl || "/placeholder.svg"}
+                                alt="Preview"
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          )}
+                          <div className="text-xs text-gray-500">Upload an image or use the URL field below</div>
+                        </div>
+                      </div>
+
                       <Input
-                        placeholder="Image URL (optional)"
+                        placeholder="Or paste image URL"
                         value={newProduct.imageUrl}
                         onChange={(e) => setNewProduct((prev) => ({ ...prev, imageUrl: e.target.value }))}
                       />
-                      <Button onClick={handleAddProduct} className="w-full">
-                        Add Product
+                      <Button onClick={handleAddProduct} className="w-full" disabled={uploadingImage}>
+                        {uploadingImage ? "Adding Product..." : "Add Product"}
                       </Button>
                     </div>
                   )}
@@ -946,7 +1069,7 @@ export default function SaturnaliaStore() {
                         <p className="text-gray-600 text-sm mb-3 line-clamp-2">{product.description}</p>
                         <div className="flex items-center justify-between mb-4">
                           <span className="text-lg font-semibold text-gray-700">${product.price.toFixed(2)}</span>
-                          {isAdmin && (
+                          {user?.email === "skumar6_be22@thapar.edu" && (
                             <div className="flex gap-1">
                               <Button variant="outline" size="sm" onClick={() => setEditingProduct(product)}>
                                 <Edit className="w-3 h-3" />
@@ -1010,7 +1133,7 @@ export default function SaturnaliaStore() {
                     />
                     <path
                       fill="#EA4335"
-                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"
                     />
                   </svg>
                   Continue with Google
@@ -1076,38 +1199,23 @@ export default function SaturnaliaStore() {
       )}
 
       {/* Admin Login Modal */}
-      {showAdminLogin && (
+      {showAdminLogin && user?.email !== "skumar6_be22@thapar.edu" && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <Card className="w-full max-w-md">
             <CardContent className="p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold">Admin Login</h3>
+                <h3 className="font-semibold">Admin Access</h3>
                 <Button variant="ghost" size="sm" onClick={() => setShowAdminLogin(false)}>
                   <X className="w-4 h-4" />
                 </Button>
               </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Admin ID</label>
-                  <Input
-                    placeholder="Enter admin ID"
-                    value={adminCredentials.id}
-                    onChange={(e) => setAdminCredentials((prev) => ({ ...prev, id: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Password</label>
-                  <Input
-                    type="password"
-                    placeholder="Enter password"
-                    value={adminCredentials.password}
-                    onChange={(e) => setAdminCredentials((prev) => ({ ...prev, password: e.target.value }))}
-                  />
-                </div>
-                {adminLoginError && <p className="text-red-500 text-sm">{adminLoginError}</p>}
-                <Button onClick={handleAdminLogin} className="w-full">
-                  Login
-                </Button>
+              <div className="text-center py-8">
+                <Lock className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+                <h4 className="text-lg font-semibold mb-2">Access Restricted</h4>
+                <p className="text-gray-600 mb-4">Admin access is only available to authorized personnel.</p>
+                <p className="text-sm text-gray-500">
+                  Please contact the system administrator if you need admin access.
+                </p>
               </div>
             </CardContent>
           </Card>
