@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Saturnalia Fest Merch Store</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Source+Sans+Pro:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --background: #ffffff;
+            --foreground: #4b5563;
+            --card: #f5f5f5;
+            --card-foreground: #4b5563;
+            --primary: #ffd700;
+            --primary-foreground: #4b5563;
+            --secondary: #ffffff;
+            --secondary-foreground: #4b5563;
+            --muted: #f5f5f5;
+            --muted-foreground: #6b7280;
+            --accent: #4b5563;
+            --accent-foreground: #ffd700;
+            --destructive: #c53030;
+            --destructive-foreground: #ffffff;
+            --border: #e5e7eb;
+            --input: #ffffff;
+            --ring: rgba(255, 215, 0, 0.5);
+            --radius: 0.5rem;
+        }
+        
+        .font-heading { font-family: 'Playfair Display', serif; }
+        .font-body { font-family: 'Source Sans Pro', sans-serif; }
+        
+        .bg-background { background-color: var(--background); }
+        .bg-card { background-color: var(--card); }
+        .bg-primary { background-color: var(--primary); }
+        .bg-secondary { background-color: var(--secondary); }
+        .bg-muted { background-color: var(--muted); }
+        
+        .text-foreground { color: var(--foreground); }
+        .text-card-foreground { color: var(--card-foreground); }
+        .text-primary-foreground { color: var(--primary-foreground); }
+        .text-muted-foreground { color: var(--muted-foreground); }
+        
+        .border-border { border-color: var(--border); }
+        
+        .loading-spinner {
+            border: 2px solid var(--muted);
+            border-top: 2px solid var(--primary);
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .skeleton {
+            background: linear-gradient(90deg, var(--muted) 25%, var(--card) 50%, var(--muted) 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+        }
+        
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-body text-foreground">
+    <!-- Header -->
+    <header class="fixed top-0 left-0 right-0 z-50 bg-gray-800 border-b border-gray-700 py-3 px-4">
+        <div class="flex items-center justify-between max-w-7xl mx-auto">
+            <!-- Title -->
+            <h1 class="text-white font-heading font-bold text-xl">Saturnalia Store</h1>
+            
+            <!-- Logo -->
+            <div class="flex-1 flex justify-center">
+                <svg width="40" height="40" viewBox="0 0 40 40" class="text-white">
+                    <circle cx="20" cy="20" r="12" fill="currentColor"/>
+                    <ellipse cx="20" cy="20" rx="18" ry="6" fill="none" stroke="currentColor" stroke-width="2"/>
+                </svg>
+            </div>
+            
+            <!-- Menu -->
+            <button class="text-white">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <line x1="3" y1="18" x2="21" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="pt-20 min-h-screen">
+        <div class="max-w-7xl mx-auto p-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Left Column - User Dashboard & Cart -->
+                <div class="md:col-span-1 order-1 md:order-1">
+                    <div class="bg-white rounded-lg border border-border p-6 sticky top-24">
+                        <!-- User Greeting -->
+                        <div id="user-greeting" class="mb-6">
+                            <h2 class="text-lg font-semibold text-foreground">Hello, Guest!</h2>
+                        </div>
+                        
+                        <!-- Action Buttons -->
+                        <div class="flex gap-2 mb-6">
+                            <button id="cart-tab" class="flex-1 px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground font-medium">
+                                🛒 Cart
+                            </button>
+                            <button id="orders-tab" class="flex-1 px-3 py-2 text-sm rounded-md bg-muted text-muted-foreground hover:bg-gray-300 transition-colors">
+                                📦 Orders
+                            </button>
+                            <button id="account-tab" class="flex-1 px-3 py-2 text-sm rounded-md bg-muted text-muted-foreground hover:bg-gray-300 transition-colors">
+                                👤 Account
+                            </button>
+                        </div>
+                        
+                        <!-- Cart Display -->
+                        <div id="cart-content">
+                            <div id="cart-loading" class="hidden flex justify-center py-8">
+                                <div class="loading-spinner"></div>
+                            </div>
+                            
+                            <div id="cart-empty" class="text-center py-8 text-muted-foreground">
+                                Your cart is empty!
+                            </div>
+                            
+                            <div id="cart-items" class="hidden space-y-4 mb-6">
+                                <!-- Cart items will be populated here -->
+                            </div>
+                            
+                            <div id="cart-summary" class="hidden border-t border-border pt-4">
+                                <div class="flex justify-between items-center mb-4">
+                                    <span class="font-semibold">Subtotal:</span>
+                                    <span id="cart-total" class="font-semibold text-lg">$0.00</span>
+                                </div>
+                                <button id="checkout-btn" class="w-full bg-primary text-primary-foreground py-3 rounded-md font-semibold hover:opacity-90 transition-opacity">
+                                    Proceed to Checkout
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Admin Panel (Hidden by default) -->
+                        <div id="admin-panel" class="hidden mt-6 pt-6 border-t border-border">
+                            <h3 class="font-semibold mb-4 text-accent-foreground">Admin Panel</h3>
+                            <div class="space-y-2">
+                                <button id="manage-products-btn" class="w-full px-4 py-2 bg-accent text-white rounded-md hover:opacity-90 transition-opacity">
+                                    Manage Products
+                                </button>
+                                <button id="view-orders-btn" class="w-full px-4 py-2 bg-accent text-white rounded-md hover:opacity-90 transition-opacity">
+                                    View All Orders
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Right Column - Product Display -->
+                <div class="md:col-span-2 order-2 md:order-2">
+                    <!-- Loading State -->
+                    <div id="products-loading" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <!-- Skeleton loaders -->
+                        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+                            <div class="skeleton h-48"></div>
+                            <div class="p-4">
+                                <div class="skeleton h-4 mb-2 rounded"></div>
+                                <div class="skeleton h-4 w-2/3 rounded"></div>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+                            <div class="skeleton h-48"></div>
+                            <div class="p-4">
+                                <div class="skeleton h-4 mb-2 rounded"></div>
+                                <div class="skeleton h-4 w-2/3 rounded"></div>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+                            <div class="skeleton h-48"></div>
+                            <div class="p-4">
+                                <div class="skeleton h-4 mb-2 rounded"></div>
+                                <div class="skeleton h-4 w-2/3 rounded"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Empty State -->
+                    <div id="products-empty" class="hidden text-center py-12">
+                        <p class="text-muted-foreground text-lg">No products available at this time.</p>
+                    </div>
+                    
+                    <!-- Products Grid -->
+                    <div id="products-grid" class="hidden grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <!-- Products will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Admin Modal -->
+    <div id="admin-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-heading font-bold">Product Management</h2>
+                    <button id="close-admin-modal" class="text-gray-500 hover:text-gray-700">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- Add Product Form -->
+                <div class="mb-8">
+                    <h3 class="font-semibold mb-4">Add New Product</h3>
+                    <form id="add-product-form" class="space-y-4">
+                        <input type="text" id="product-name" placeholder="Product Name" class="w-full px-3 py-2 border border-border rounded-md" required>
+                        <input type="number" id="product-price" placeholder="Price" step="0.01" class="w-full px-3 py-2 border border-border rounded-md" required>
+                        <textarea id="product-description" placeholder="Description" class="w-full px-3 py-2 border border-border rounded-md h-24" required></textarea>
+                        <input type="url" id="product-image" placeholder="Image URL" class="w-full px-3 py-2 border border-border rounded-md" required>
+                        <button type="submit" class="w-full bg-primary text-primary-foreground py-2 rounded-md font-semibold hover:opacity-90 transition-opacity">
+                            Add Product
+                        </button>
+                    </form>
+                </div>
+                
+                <!-- Products List -->
+                <div>
+                    <h3 class="font-semibold mb-4">Manage Products</h3>
+                    <div id="admin-products-list" class="space-y-4">
+                        <!-- Admin products will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Firebase Configuration
+        const firebaseConfig = {
+            // These would be replaced with actual config values
+            apiKey: "demo-key",
+            authDomain: "saturnalia-store.firebaseapp.com",
+            projectId: "saturnalia-store",
+            storageBucket: "saturnalia-store.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef123456"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const storage = firebase.storage();
+
+        // Global state
+        let currentUser = null;
+        let isAdmin = false;
+        let cartItems = [];
+        let products = [];
+
+        // DOM Elements
+        const userGreeting = document.getElementById('user-greeting');
+        const cartContent = document.getElementById('cart-content');
+        const cartLoading = document.getElementById('cart-loading');
+        const cartEmpty = document.getElementById('cart-empty');
+        const cartItemsContainer = document.getElementById('cart-items');
+        const cartSummary = document.getElementById('cart-summary');
+        const cartTotal = document.getElementById('cart-total');
+        const productsLoading = document.getElementById('products-loading');
+        const productsEmpty = document.getElementById('products-empty');
+        const productsGrid = document.getElementById('products-grid');
+        const adminPanel = document.getElementById('admin-panel');
+        const adminModal = document.getElementById('admin-modal');
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeAuth();
+            setupEventListeners();
+        });
+
+        // Authentication
+        function initializeAuth() {
+            // Try to sign in with custom token if available
+            const customToken = window.__initial_auth_token;
+            
+            if (customToken) {
+                auth.signInWithCustomToken(customToken)
+                    .catch(error => {
+                        console.log('Custom token failed, signing in anonymously');
+                        return auth.signInAnonymously();
+                    });
+            } else {
+                auth.signInAnonymously();
+            }
+
+            // Listen for auth state changes
+            auth.onAuthStateChanged(user => {
+                if (user) {
+                    currentUser = user;
+                    updateUserGreeting();
+                    checkAdminStatus();
+                    loadProducts();
+                    setupCartListener();
+                } else {
+                    currentUser = null;
+                    updateUserGreeting();
+                }
+            });
+        }
+
+        function updateUserGreeting() {
+            if (currentUser) {
+                userGreeting.innerHTML = `<h2 class="text-lg font-semibold text-foreground">Hello, ${currentUser.uid.substring(0, 8)}!</h2>`;
+            } else {
+                userGreeting.innerHTML = `<h2 class="text-lg font-semibold text-foreground">Hello, Guest!</h2>`;
+            }
+        }
+
+        async function checkAdminStatus() {
+            if (!currentUser) return;
+            
+            try {
+                const idTokenResult = await currentUser.getIdTokenResult();
+                isAdmin = idTokenResult.claims.admin === true;
+                
+                if (isAdmin) {
+                    adminPanel.classList.remove('hidden');
+                }
+            } catch (error) {
+                console.log('Error checking admin status:', error);
+            }
+        }
+
+        // Products
+        async function loadProducts() {
+            try {
+                productsLoading.classList.remove('hidden');
+                productsEmpty.classList.add('hidden');
+                productsGrid.classList.add('hidden');
+
+                const snapshot = await db.collection('products').get();
+                products = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+                if (products.length === 0) {
+                    productsLoading.classList.add('hidden');
+                    productsEmpty.classList.remove('hidden');
+                } else {
+                    renderProducts();
+                    productsLoading.classList.add('hidden');
+                    productsGrid.classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Error loading products:', error);
+                productsLoading.classList.add('hidden');
+                productsEmpty.classList.remove('hidden');
+            }
+        }
+
+        function renderProducts() {
+            productsGrid.innerHTML = products.map(product => `
+                <div class="bg-white rounded-lg shadow-md hover:shadow-xl transition-shadow duration-300 overflow-hidden">
+                    <div class="aspect-video bg-gray-200 flex items-center justify-center">
+                        <img src="${product.imageUrl || '/placeholder.svg?height=200&width=300'}" 
+                             alt="${product.name}" 
+                             class="w-full h-full object-cover"
+                             onerror="this.src='/placeholder.svg?height=200&width=300'">
+                    </div>
+                    <div class="p-4">
+                        <h3 class="font-semibold text-card-foreground mb-2 truncate">${product.name}</h3>
+                        <p class="text-muted-foreground text-sm mb-3 line-clamp-2">${product.description || ''}</p>
+                        <div class="flex justify-between items-center mb-3">
+                            <span class="text-lg font-bold text-foreground">$${product.price.toFixed(2)}</span>
+                        </div>
+                        <button onclick="addToCart('${product.id}')" 
+                                class="w-full bg-primary text-primary-foreground py-2 rounded-md font-semibold hover:opacity-90 transition-opacity flex items-center justify-center">
+                            <span class="add-to-cart-text">Add to Cart</span>
+                            <div class="add-to-cart-spinner hidden loading-spinner ml-2"></div>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Cart functionality
+        function setupCartListener() {
+            if (!currentUser) return;
+
+            db.collection('users').doc(currentUser.uid).collection('cart')
+                .onSnapshot(snapshot => {
+                    cartItems = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    renderCart();
+                });
+        }
+
+        function renderCart() {
+            if (cartItems.length === 0) {
+                cartEmpty.classList.remove('hidden');
+                cartItemsContainer.classList.add('hidden');
+                cartSummary.classList.add('hidden');
+            } else {
+                cartEmpty.classList.add('hidden');
+                cartItemsContainer.classList.remove('hidden');
+                cartSummary.classList.remove('hidden');
+                
+                cartItemsContainer.innerHTML = cartItems.map(item => `
+                    <div class="flex items-center gap-3 p-3 border border-border rounded-md">
+                        <img src="${item.imageUrl || '/placeholder.svg?height=60&width=60'}" 
+                             alt="${item.name}" 
+                             class="w-12 h-12 object-cover rounded"
+                             onerror="this.src='/placeholder.svg?height=60&width=60'">
+                        <div class="flex-1 min-w-0">
+                            <h4 class="font-medium text-sm truncate">${item.name}</h4>
+                            <p class="text-muted-foreground text-xs">$${item.price.toFixed(2)} each</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="updateCartQuantity('${item.id}', ${item.quantity - 1})" 
+                                    class="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-sm hover:bg-gray-300">-</button>
+                            <span class="text-sm font-medium w-8 text-center">${item.quantity}</span>
+                            <button onclick="updateCartQuantity('${item.id}', ${item.quantity + 1})" 
+                                    class="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-sm hover:bg-gray-300">+</button>
+                        </div>
+                        <div class="text-right">
+                            <p class="font-medium text-sm">$${(item.price * item.quantity).toFixed(2)}</p>
+                            <button onclick="removeFromCart('${item.id}')" 
+                                    class="text-destructive hover:text-red-700 text-xs">
+                                🗑️
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+                
+                const total = cartItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+                cartTotal.textContent = `$${total.toFixed(2)}`;
+            }
+        }
+
+        async function addToCart(productId) {
+            if (!currentUser) {
+                alert('Please sign in to add items to cart');
+                return;
+            }
+
+            const product = products.find(p => p.id === productId);
+            if (!product) return;
+
+            const button = event.target.closest('button');
+            const text = button.querySelector('.add-to-cart-text');
+            const spinner = button.querySelector('.add-to-cart-spinner');
+            
+            text.classList.add('hidden');
+            spinner.classList.remove('hidden');
+            button.disabled = true;
+
+            try {
+                const cartRef = db.collection('users').doc(currentUser.uid).collection('cart').doc(productId);
+                const cartDoc = await cartRef.get();
+
+                if (cartDoc.exists) {
+                    await cartRef.update({
+                        quantity: cartDoc.data().quantity + 1
+                    });
+                } else {
+                    await cartRef.set({
+                        productId: productId,
+                        name: product.name,
+                        price: product.price,
+                        imageUrl: product.imageUrl,
+                        quantity: 1
+                    });
+                }
+            } catch (error) {
+                console.error('Error adding to cart:', error);
+                alert('Error adding item to cart');
+            } finally {
+                text.classList.remove('hidden');
+                spinner.classList.add('hidden');
+                button.disabled = false;
+            }
+        }
+
+        async function updateCartQuantity(itemId, newQuantity) {
+            if (!currentUser) return;
+
+            if (newQuantity <= 0) {
+                removeFromCart(itemId);
+                return;
+            }
+
+            try {
+                await db.collection('users').doc(currentUser.uid).collection('cart').doc(itemId).update({
+                    quantity: newQuantity
+                });
+            } catch (error) {
+                console.error('Error updating cart:', error);
+            }
+        }
+
+        async function removeFromCart(itemId) {
+            if (!currentUser) return;
+
+            try {
+                await db.collection('users').doc(currentUser.uid).collection('cart').doc(itemId).delete();
+            } catch (error) {
+                console.error('Error removing from cart:', error);
+            }
+        }
+
+        // Event listeners
+        function setupEventListeners() {
+            // Tab switching
+            document.getElementById('cart-tab').addEventListener('click', () => switchTab('cart'));
+            document.getElementById('orders-tab').addEventListener('click', () => switchTab('orders'));
+            document.getElementById('account-tab').addEventListener('click', () => switchTab('account'));
+
+            // Admin panel
+            document.getElementById('manage-products-btn')?.addEventListener('click', openAdminModal);
+            document.getElementById('close-admin-modal').addEventListener('click', closeAdminModal);
+            document.getElementById('add-product-form').addEventListener('submit', addProduct);
+
+            // Checkout
+            document.getElementById('checkout-btn').addEventListener('click', () => {
+                alert('Checkout functionality would be implemented here');
+            });
+        }
+
+        function switchTab(tab) {
+            // Update button styles
+            document.querySelectorAll('[id$="-tab"]').forEach(btn => {
+                btn.className = 'flex-1 px-3 py-2 text-sm rounded-md bg-muted text-muted-foreground hover:bg-gray-300 transition-colors';
+            });
+            document.getElementById(`${tab}-tab`).className = 'flex-1 px-3 py-2 text-sm rounded-md bg-primary text-primary-foreground font-medium';
+
+            // Show appropriate content
+            if (tab === 'cart') {
+                cartContent.classList.remove('hidden');
+            } else {
+                cartContent.classList.add('hidden');
+                // Other tab content would be implemented here
+            }
+        }
+
+        // Admin functions
+        function openAdminModal() {
+            if (!isAdmin) return;
+            adminModal.classList.remove('hidden');
+            loadAdminProducts();
+        }
+
+        function closeAdminModal() {
+            adminModal.classList.add('hidden');
+        }
+
+        async function addProduct(event) {
+            event.preventDefault();
+            if (!isAdmin) return;
+
+            const name = document.getElementById('product-name').value;
+            const price = parseFloat(document.getElementById('product-price').value);
+            const description = document.getElementById('product-description').value;
+            const imageUrl = document.getElementById('product-image').value;
+
+            try {
+                await db.collection('products').add({
+                    name,
+                    price,
+                    description,
+                    imageUrl,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+
+                // Reset form
+                event.target.reset();
+                loadProducts();
+                loadAdminProducts();
+            } catch (error) {
+                console.error('Error adding product:', error);
+                alert('Error adding product');
+            }
+        }
+
+        async function loadAdminProducts() {
+            if (!isAdmin) return;
+
+            try {
+                const snapshot = await db.collection('products').get();
+                const adminProducts = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+                const adminProductsList = document.getElementById('admin-products-list');
+                adminProductsList.innerHTML = adminProducts.map(product => `
+                    <div class="border border-border rounded-md p-4">
+                        <div class="flex justify-between items-start">
+                            <div class="flex-1">
+                                <h4 class="font-semibold">${product.name}</h4>
+                                <p class="text-muted-foreground text-sm">${product.description}</p>
+                                <p class="font-medium">$${product.price.toFixed(2)}</p>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="editProduct('${product.id}')" class="px-3 py-1 bg-primary text-primary-foreground rounded text-sm">Edit</button>
+                                <button onclick="deleteProduct('${product.id}')" class="px-3 py-1 bg-destructive text-destructive-foreground rounded text-sm">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading admin products:', error);
+            }
+        }
+
+        async function deleteProduct(productId) {
+            if (!isAdmin) return;
+            
+            if (confirm('Are you sure you want to delete this product?')) {
+                try {
+                    await db.collection('products').doc(productId).delete();
+                    loadProducts();
+                    loadAdminProducts();
+                } catch (error) {
+                    console.error('Error deleting product:', error);
+                    alert('Error deleting product');
+                }
+            }
+        }
+
+        function editProduct(productId) {
+            // Edit functionality would be implemented here
+            alert('Edit functionality would be implemented here');
+        }
+    </script>
+</body>
+</html>
