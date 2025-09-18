@@ -7,51 +7,45 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Trash2, Plus, Minus, ShoppingCart, Package, User, Menu, Edit, X, Lock } from "lucide-react"
 
-// Mock Firebase-like functionality for demo
-const mockProducts = [
-  {
-    id: "1",
-    name: "Saturnalia Festival T-Shirt",
-    price: 29.99,
-    imageUrl: "/saturn-festival-t-shirt.jpg",
-    description: "Celebrate the ancient Roman festival with this premium cotton tee",
-  },
-  {
-    id: "2",
-    name: "Saturn Ring Hoodie",
-    price: 49.99,
-    imageUrl: "/saturn-ring-hoodie.jpg",
-    description: "Cozy hoodie featuring Saturn's iconic rings",
-  },
-  {
-    id: "3",
-    name: "Saturnalia Mug",
-    price: 19.99,
-    imageUrl: "/saturn-ceramic-mug.jpg",
-    description: "Start your day with this celestial ceramic mug",
-  },
-  {
-    id: "4",
-    name: "Festival Poster",
-    price: 24.99,
-    imageUrl: "/saturnalia-festival-poster.jpg",
-    description: "Limited edition festival poster",
-  },
-  {
-    id: "5",
-    name: "Saturn Enamel Pin",
-    price: 12.99,
-    imageUrl: "/saturn-enamel-pin.jpg",
-    description: "Collectible enamel pin with Saturn design",
-  },
-  {
-    id: "6",
-    name: "Saturnalia Tote Bag",
-    price: 22.99,
-    imageUrl: "/saturn-tote-bag.jpg",
-    description: "Eco-friendly canvas tote bag",
-  },
-]
+import { initializeApp } from "firebase/app"
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  type User as FirebaseUser,
+} from "firebase/auth"
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  getDocs,
+  doc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  setDoc,
+  getDoc,
+  query,
+  where,
+  orderBy,
+} from "firebase/firestore"
+import { getStorage } from "firebase/storage"
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+}
+
+const app = initializeApp(firebaseConfig)
+const auth = getAuth(app)
+const db = getFirestore(app)
+const storage = getStorage(app)
 
 interface CartItem {
   id: string
@@ -69,10 +63,31 @@ interface Product {
   description: string
 }
 
+interface Order {
+  id: string
+  userId: string
+  items: CartItem[]
+  total: number
+  status: string
+  createdAt: Date
+  shippingInfo: {
+    firstName: string
+    lastName: string
+    email: string
+    phone: string
+    address: string
+    city: string
+    state: string
+    zipCode: string
+    country: string
+  }
+}
+
 export default function SaturnaliaStore() {
-  const [user, setUser] = useState<{ uid: string; email: string } | null>(null)
+  const [user, setUser] = useState<FirebaseUser | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
+  const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState("cart")
   const [isAdmin, setIsAdmin] = useState(false)
@@ -92,74 +107,196 @@ export default function SaturnaliaStore() {
   const [userCredentials, setUserCredentials] = useState({ email: "", password: "" })
   const [userLoginError, setUserLoginError] = useState("")
   const [isRegistering, setIsRegistering] = useState(false)
+  const [shippingInfo, setShippingInfo] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    address: "",
+    city: "",
+    state: "",
+    zipCode: "",
+    country: "",
+  })
+  const [paymentInfo, setPaymentInfo] = useState({
+    cardNumber: "",
+    expiryDate: "",
+    cvv: "",
+    cardholderName: "",
+  })
 
-  // Simulate Firebase initialization and data loading
   useEffect(() => {
-    const initializeStore = async () => {
-      // Simulate loading delay
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-      setProducts(mockProducts)
-      setLoading(false)
-    }
-
-    initializeStore()
-  }, [])
-
-  // Cart management functions
-  const addToCart = (product: Product) => {
-    setCart((prevCart) => {
-      const existingItem = prevCart.find((item) => item.id === product.id)
-      if (existingItem) {
-        return prevCart.map((item) => (item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item))
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser)
+      if (firebaseUser) {
+        setShippingInfo((prev) => ({ ...prev, email: firebaseUser.email || "" }))
+        loadUserCart(firebaseUser.uid)
+        loadUserOrders(firebaseUser.uid)
       } else {
-        return [
-          ...prevCart,
-          {
-            id: product.id,
-            name: product.name,
-            price: product.price,
-            imageUrl: product.imageUrl,
-            quantity: 1,
-          },
-        ]
+        setCart([])
+        setOrders([])
       }
     })
-  }
 
-  const updateCartQuantity = (id: string, newQuantity: number) => {
-    if (newQuantity <= 0) {
-      removeFromCart(id)
-    } else {
-      setCart((prevCart) => prevCart.map((item) => (item.id === id ? { ...item, quantity: newQuantity } : item)))
+    return () => unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    const loadProducts = async () => {
+      try {
+        const productsCollection = collection(db, "products")
+        const unsubscribe = onSnapshot(productsCollection, (snapshot) => {
+          const productsData = snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          })) as Product[]
+          setProducts(productsData)
+          setLoading(false)
+        })
+
+        return () => unsubscribe()
+      } catch (error) {
+        console.error("Error loading products:", error)
+        setLoading(false)
+      }
+    }
+
+    loadProducts()
+  }, [])
+
+  const loadUserCart = async (userId: string) => {
+    try {
+      const cartCollection = collection(db, "users", userId, "cart")
+      const unsubscribe = onSnapshot(cartCollection, (snapshot) => {
+        const cartData = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as CartItem[]
+        setCart(cartData)
+      })
+
+      return () => unsubscribe()
+    } catch (error) {
+      console.error("Error loading cart:", error)
     }
   }
 
-  const removeFromCart = (id: string) => {
-    setCart((prevCart) => prevCart.filter((item) => item.id !== id))
+  const loadUserOrders = async (userId: string) => {
+    try {
+      const ordersCollection = collection(db, "orders")
+      const userOrdersQuery = query(ordersCollection, where("userId", "==", userId), orderBy("createdAt", "desc"))
+      const unsubscribe = onSnapshot(userOrdersQuery, (snapshot) => {
+        const ordersData = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+          createdAt: doc.data().createdAt?.toDate() || new Date(),
+        })) as Order[]
+        setOrders(ordersData)
+      })
+
+      return () => unsubscribe()
+    } catch (error) {
+      console.error("Error loading orders:", error)
+    }
+  }
+
+  const addToCart = async (product: Product) => {
+    if (!user) {
+      setShowUserLogin(true)
+      return
+    }
+
+    try {
+      const cartItemRef = doc(db, "users", user.uid, "cart", product.id)
+      const cartItemDoc = await getDoc(cartItemRef)
+
+      if (cartItemDoc.exists()) {
+        const currentQuantity = cartItemDoc.data().quantity || 0
+        await updateDoc(cartItemRef, {
+          quantity: currentQuantity + 1,
+        })
+      } else {
+        await setDoc(cartItemRef, {
+          id: product.id,
+          name: product.name,
+          price: product.price,
+          imageUrl: product.imageUrl,
+          quantity: 1,
+        })
+      }
+    } catch (error) {
+      console.error("Error adding to cart:", error)
+    }
+  }
+
+  const updateCartQuantity = async (id: string, newQuantity: number) => {
+    if (!user) return
+
+    try {
+      if (newQuantity <= 0) {
+        await deleteDoc(doc(db, "users", user.uid, "cart", id))
+      } else {
+        await updateDoc(doc(db, "users", user.uid, "cart", id), {
+          quantity: newQuantity,
+        })
+      }
+    } catch (error) {
+      console.error("Error updating cart:", error)
+    }
+  }
+
+  const removeFromCart = async (id: string) => {
+    if (!user) return
+
+    try {
+      await deleteDoc(doc(db, "users", user.uid, "cart", id))
+    } catch (error) {
+      console.error("Error removing from cart:", error)
+    }
   }
 
   const cartTotal = cart.reduce((total, item) => total + item.price * item.quantity, 0)
 
-  // Admin functions
-  const handleAddProduct = () => {
+  const handleAddProduct = async () => {
     if (newProduct.name && newProduct.price > 0) {
-      const product: Product = {
-        id: Date.now().toString(),
-        ...newProduct,
-        imageUrl: newProduct.imageUrl || `/placeholder.svg?height=300&width=300&query=${newProduct.name}`,
+      try {
+        const productsCollection = collection(db, "products")
+        await addDoc(productsCollection, {
+          name: newProduct.name,
+          price: newProduct.price,
+          description: newProduct.description,
+          imageUrl: newProduct.imageUrl || `/placeholder.svg?height=300&width=300&query=${newProduct.name}`,
+          createdAt: new Date(),
+        })
+        setNewProduct({ name: "", price: 0, description: "", imageUrl: "" })
+      } catch (error) {
+        console.error("Error adding product:", error)
       }
-      setProducts((prev) => [...prev, product])
-      setNewProduct({ name: "", price: 0, description: "", imageUrl: "" })
     }
   }
 
-  const handleEditProduct = (product: Product) => {
-    setProducts((prev) => prev.map((p) => (p.id === product.id ? product : p)))
-    setEditingProduct(null)
+  const handleEditProduct = async (product: Product) => {
+    try {
+      const productRef = doc(db, "products", product.id)
+      await updateDoc(productRef, {
+        name: product.name,
+        price: product.price,
+        description: product.description,
+        imageUrl: product.imageUrl,
+        updatedAt: new Date(),
+      })
+      setEditingProduct(null)
+    } catch (error) {
+      console.error("Error updating product:", error)
+    }
   }
 
-  const handleDeleteProduct = (id: string) => {
-    setProducts((prev) => prev.filter((p) => p.id !== id))
+  const handleDeleteProduct = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "products", id))
+    } catch (error) {
+      console.error("Error deleting product:", error)
+    }
   }
 
   const handleAdminLogin = () => {
@@ -178,51 +315,100 @@ export default function SaturnaliaStore() {
     setShowAdminPanel(false)
   }
 
-  // User authentication functions
-  const handleUserLogin = () => {
-    // Mock login validation - in real app, this would connect to Firebase Auth
-    if (userCredentials.email && userCredentials.password) {
-      const mockUser = {
-        uid: `user-${Date.now()}`,
-        email: userCredentials.email,
-      }
-      setUser(mockUser)
+  const handleUserLogin = async () => {
+    try {
+      await signInWithEmailAndPassword(auth, userCredentials.email, userCredentials.password)
       setShowUserLogin(false)
       setUserCredentials({ email: "", password: "" })
       setUserLoginError("")
-    } else {
-      setUserLoginError("Please enter both email and password.")
+    } catch (error: any) {
+      setUserLoginError(error.message || "Login failed. Please try again.")
     }
   }
 
-  const handleUserRegister = () => {
-    // Mock registration - in real app, this would connect to Firebase Auth
-    if (userCredentials.email && userCredentials.password) {
-      const mockUser = {
-        uid: `user-${Date.now()}`,
-        email: userCredentials.email,
-      }
-      setUser(mockUser)
+  const handleUserRegister = async () => {
+    try {
+      await createUserWithEmailAndPassword(auth, userCredentials.email, userCredentials.password)
       setShowUserLogin(false)
       setUserCredentials({ email: "", password: "" })
       setUserLoginError("")
-    } else {
-      setUserLoginError("Please enter both email and password.")
+    } catch (error: any) {
+      setUserLoginError(error.message || "Registration failed. Please try again.")
     }
   }
 
-  const handleUserLogout = () => {
-    setUser(null)
-    setCart([])
-    setActiveTab("cart")
+  const handleUserLogout = async () => {
+    try {
+      await signOut(auth)
+      setActiveTab("cart")
+    } catch (error) {
+      console.error("Error signing out:", error)
+    }
   }
 
   const proceedToCheckout = () => {
+    if (!user) {
+      setShowUserLogin(true)
+      return
+    }
     setCurrentPage("checkout")
   }
 
   const backToStore = () => {
     setCurrentPage("store")
+  }
+
+  const completeOrder = async () => {
+    if (!user || cart.length === 0) return
+
+    try {
+      // Create order in Firestore
+      const ordersCollection = collection(db, "orders")
+      await addDoc(ordersCollection, {
+        userId: user.uid,
+        items: cart,
+        total: cartTotal,
+        status: "pending",
+        createdAt: new Date(),
+        shippingInfo: shippingInfo,
+        paymentInfo: {
+          cardNumber: paymentInfo.cardNumber.slice(-4), // Only store last 4 digits
+          cardholderName: paymentInfo.cardholderName,
+        },
+      })
+
+      // Clear user's cart
+      const cartCollection = collection(db, "users", user.uid, "cart")
+      const cartSnapshot = await getDocs(cartCollection)
+      const deletePromises = cartSnapshot.docs.map((doc) => deleteDoc(doc.ref))
+      await Promise.all(deletePromises)
+
+      // Reset form and go back to store
+      setShippingInfo({
+        firstName: "",
+        lastName: "",
+        email: user.email || "",
+        phone: "",
+        address: "",
+        city: "",
+        state: "",
+        zipCode: "",
+        country: "",
+      })
+      setPaymentInfo({
+        cardNumber: "",
+        expiryDate: "",
+        cvv: "",
+        cardholderName: "",
+      })
+      setCurrentPage("store")
+      setActiveTab("orders")
+
+      alert("Order placed successfully!")
+    } catch (error) {
+      console.error("Error completing order:", error)
+      alert("Error placing order. Please try again.")
+    }
   }
 
   // Loading skeleton component
@@ -277,15 +463,52 @@ export default function SaturnaliaStore() {
         <div className="mb-8">
           <h3 className="text-lg font-semibold mb-4">Shipping Information</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input placeholder="First Name" />
-            <Input placeholder="Last Name" />
-            <Input placeholder="Email" value={user?.email || ""} />
-            <Input placeholder="Phone" className="md:col-span-2" />
-            <Input placeholder="Address" className="md:col-span-2" />
-            <Input placeholder="City" />
-            <Input placeholder="State" />
-            <Input placeholder="ZIP Code" />
-            <Input placeholder="Country" />
+            <Input
+              placeholder="First Name"
+              value={shippingInfo.firstName}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, firstName: e.target.value }))}
+            />
+            <Input
+              placeholder="Last Name"
+              value={shippingInfo.lastName}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, lastName: e.target.value }))}
+            />
+            <Input
+              placeholder="Email"
+              value={shippingInfo.email}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, email: e.target.value }))}
+            />
+            <Input
+              placeholder="Phone"
+              value={shippingInfo.phone}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, phone: e.target.value }))}
+            />
+            <Input
+              placeholder="Address"
+              className="md:col-span-2"
+              value={shippingInfo.address}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, address: e.target.value }))}
+            />
+            <Input
+              placeholder="City"
+              value={shippingInfo.city}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, city: e.target.value }))}
+            />
+            <Input
+              placeholder="State"
+              value={shippingInfo.state}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, state: e.target.value }))}
+            />
+            <Input
+              placeholder="ZIP Code"
+              value={shippingInfo.zipCode}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, zipCode: e.target.value }))}
+            />
+            <Input
+              placeholder="Country"
+              value={shippingInfo.country}
+              onChange={(e) => setShippingInfo((prev) => ({ ...prev, country: e.target.value }))}
+            />
           </div>
         </div>
 
@@ -293,16 +516,38 @@ export default function SaturnaliaStore() {
         <div className="mb-8">
           <h3 className="text-lg font-semibold mb-4">Payment Information</h3>
           <div className="space-y-4">
-            <Input placeholder="Card Number" />
+            <Input
+              placeholder="Card Number"
+              value={paymentInfo.cardNumber}
+              onChange={(e) => setPaymentInfo((prev) => ({ ...prev, cardNumber: e.target.value }))}
+            />
             <div className="grid grid-cols-2 gap-4">
-              <Input placeholder="MM/YY" />
-              <Input placeholder="CVV" />
+              <Input
+                placeholder="MM/YY"
+                value={paymentInfo.expiryDate}
+                onChange={(e) => setPaymentInfo((prev) => ({ ...prev, expiryDate: e.target.value }))}
+              />
+              <Input
+                placeholder="CVV"
+                value={paymentInfo.cvv}
+                onChange={(e) => setPaymentInfo((prev) => ({ ...prev, cvv: e.target.value }))}
+              />
             </div>
-            <Input placeholder="Cardholder Name" />
+            <Input
+              placeholder="Cardholder Name"
+              value={paymentInfo.cardholderName}
+              onChange={(e) => setPaymentInfo((prev) => ({ ...prev, cardholderName: e.target.value }))}
+            />
           </div>
         </div>
 
-        <Button className="w-full bg-yellow-600 hover:bg-yellow-700 text-white py-3 text-lg">
+        <Button
+          onClick={completeOrder}
+          className="w-full bg-yellow-600 hover:bg-yellow-700 text-white py-3 text-lg"
+          disabled={
+            !shippingInfo.firstName || !shippingInfo.lastName || !shippingInfo.address || !paymentInfo.cardNumber
+          }
+        >
           Complete Order - ${cartTotal.toFixed(2)}
         </Button>
       </Card>
@@ -508,8 +753,48 @@ export default function SaturnaliaStore() {
                 )}
 
                 {activeTab === "orders" && (
-                  <div className="text-center py-8 text-gray-500">
-                    {user ? "No orders yet!" : "Please sign in to view orders."}
+                  <div>
+                    {user ? (
+                      orders.length === 0 ? (
+                        <div className="text-center py-8 text-gray-500">No orders yet!</div>
+                      ) : (
+                        <div className="space-y-4">
+                          {orders.map((order) => (
+                            <div key={order.id} className="p-4 border rounded-lg">
+                              <div className="flex justify-between items-start mb-2">
+                                <div>
+                                  <p className="font-medium">Order #{order.id.slice(-8)}</p>
+                                  <p className="text-sm text-gray-600">{order.createdAt.toLocaleDateString()}</p>
+                                </div>
+                                <span
+                                  className={`px-2 py-1 rounded text-xs font-medium ${
+                                    order.status === "pending"
+                                      ? "bg-yellow-100 text-yellow-800"
+                                      : order.status === "shipped"
+                                        ? "bg-blue-100 text-blue-800"
+                                        : "bg-green-100 text-green-800"
+                                  }`}
+                                >
+                                  {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+                                </span>
+                              </div>
+                              <div className="text-sm text-gray-600 mb-2">
+                                {order.items.length} item(s) - ${order.total.toFixed(2)}
+                              </div>
+                              <div className="space-y-1">
+                                {order.items.map((item, index) => (
+                                  <div key={index} className="text-xs text-gray-500">
+                                    {item.name} x{item.quantity}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">Please sign in to view orders.</div>
+                    )}
                   </div>
                 )}
 
@@ -523,7 +808,7 @@ export default function SaturnaliaStore() {
                         </div>
                         <div>
                           <label className="block text-sm font-medium mb-1">Email</label>
-                          <Input value={user.email} disabled />
+                          <Input value={user.email || ""} disabled />
                         </div>
                       </>
                     ) : (
